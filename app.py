@@ -3,14 +3,43 @@ import pandas as pd
 import os
 import glob
 import sys
+import hashlib
 
 sys.path.append(os.getcwd())
 import bookmaker_kornerv10 as model
 
+# ====================== PASSWORD ZAŠTITA ======================
+PASSWORD = "tvoja_lozinka_2026"   # ← PROMENI OVO U NEŠTO JAKO!
+
+def check_password():
+    """Vrati True ako je password tačan"""
+    if "password_correct" not in st.session_state:
+        st.session_state.password_correct = False
+
+    if not st.session_state.password_correct:
+        st.text_input(
+            "Unesi lozinku za pristup",
+            type="password",
+            key="password",
+            on_change=check_password_callback
+        )
+        return False
+    return True
+
+def check_password_callback():
+    if hashlib.sha256(st.session_state["password"].encode()).hexdigest() == hashlib.sha256(PASSWORD.encode()).hexdigest():
+        st.session_state.password_correct = True
+        st.rerun()
+    else:
+        st.error("❌ Pogrešna lozinka")
+
 # ====================== CONFIG ======================
+if not check_password():
+    st.stop()   # zaustavlja dalje učitavanje
+
 st.set_page_config(page_title="Corners Model Dashboard", layout="wide")
 st.title("🏟️ Corners Model Dashboard")
-st.markdown("**Premier League 2025/26 | Dinamički μ League**")
+st.markdown("**Premier League 2025/26 | Privatni dashboard**")
 
 DATA_DIR = "data"
 
