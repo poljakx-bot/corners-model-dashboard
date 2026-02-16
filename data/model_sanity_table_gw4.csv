@@ -1,0 +1,9 @@
+metric,value
+train_rows,790.0
+emp_total_corners_mean,10.451898734177215
+emp_total_corners_std,3.4833550231914825
+beta0,1.5125016868987982
+home_adv,0.11235387855660021
+alpha,0.029999999999999995
+tempo_min,
+tempo_max,
