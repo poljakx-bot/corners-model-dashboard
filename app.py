@@ -192,9 +192,9 @@ st.sidebar.metric(
 
 st.sidebar.caption(f"Model modul: **{MODEL_MODULE_NAME}**")
 
-margin = st.sidebar.slider("Margin", 0.010, 0.120, 0.080, step=0.005)
-alpha_squeeze = st.sidebar.slider("Alpha Squeeze", 0.50, 0.90, 0.68, step=0.01)
-over_price_boost = st.sidebar.slider("Over Price Boost", 0.00, 0.03, 0.018, step=0.001)
+margin = st.sidebar.slider("Margin", 0.000, 0.120, 0.080, step=0.005)
+alpha_squeeze = st.sidebar.slider("Suzi raspodelu", 0.50, 9.90, 0.68, step=0.01)
+over_price_boost = st.sidebar.slider("Pomeri kvotu za Over", 0.00, 0.10, 0.01, step=0.005)
 use_tempo = st.sidebar.checkbox("Use Tempo Layer", value=False)
 
 st.sidebar.markdown("---")
