@@ -54,8 +54,6 @@ OVER_PRICE_BOOST_DEFAULT = 0.00
 N_SIMS = 600_000
 RNG_SEED = 123
 
-
-
 def _stable_match_seed(base_seed: int, home: str, away: str) -> int:
     """Deterministic per-fixture seed (stable across runs/OS)."""
     s = f"{int(base_seed)}|{home}|{away}".encode('utf-8', errors='ignore')
@@ -88,7 +86,6 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 ACTIVE_SEASON_HINT = "2025-to-2026"
 
 SEASON_WEIGHTS = {
-    "2023-to-2024": 0.0,
     "2024-to-2025": 1.0,
     "2025-to-2026": 1.0,
 }
@@ -141,7 +138,6 @@ def bookmaker_odds_two_way(p_over: float, margin: float, over_price_boost: float
 
     return 1.0 / imp_over, 1.0 / imp_under, imp_over, imp_under
 
-
 # =============================================================================
 # HELPERS
 # =============================================================================
@@ -174,7 +170,6 @@ def _find_pl_season_csv(season_hint: str) -> str | None:
             return sorted(hits)[0]
     return None
 
-
 # =============================================================================
 # NEGATIVE BINOMIAL
 # =============================================================================
@@ -184,7 +179,6 @@ def nb_logpmf(y: np.ndarray, mu: np.ndarray, alpha: float) -> np.ndarray:
     p = r / (r + mu)
     return (gammaln(y + r) - gammaln(r) - gammaln(y + 1) +
             r * np.log(p) + y * np.log(1.0 - p))
-
 
 def nb_rvs_vectorized(mu: float, alpha: float, rng: np.random.Generator, size: int) -> np.ndarray:
     """Safe NB simulacija – clip za ekstreme."""
@@ -196,7 +190,6 @@ def nb_rvs_vectorized(mu: float, alpha: float, rng: np.random.Generator, size: i
     lam = np.clip(lam, 1e-8, 5000.0)  # 5000 je više nego dovoljno za corners (max realno ~40)
     
     return rng.poisson(lam)
-
 
 # =============================================================================
 # DATA LOADING & WEIGHTING
