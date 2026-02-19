@@ -51,7 +51,7 @@ LOW_SAMPLE_MATCHES = 15.0
 UNCERTAINTY_BOOST = 0.00
 
 OVER_PRICE_BOOST_DEFAULT = 0.00
-N_SIMS = 600_000
+N_SIMS = 200_000
 RNG_SEED = 123
 
 
@@ -98,7 +98,7 @@ L2_LAMBDA_TEAM_BASE = 0.06
 L2_LAMBDA_HOMEADV   = 0.01
 EXPOSURE_EPS        = 5.0
 
-HALF_LIFE_GW = 38.0
+HALF_LIFE_GW = 5.0
 SEASON_GW = 38
 
 # FootyStats columns
@@ -578,6 +578,27 @@ def simulate_total_corners(
             infl = 1.0 + min(MISMATCH_INFLATE_CAP, MISMATCH_INFLATE_SLOPE * (gap - MISMATCH_GAP_THRESHOLD))
             mu_h_adj *= infl
             mu_a_adj *= infl
+    # ------------------------------------------------------------------
+    # CHAOS RELEASE (EPL survival-style teams don't suppress corners)
+    # This corrects NB bias where low-possession teams look like low-event.
+    # ------------------------------------------------------------------
+    away_att = model.attack.get(away, 0.0)
+    away_def = model.defense.get(away, 0.0)
+
+    home_att = model.attack.get(home, 0.0)
+    home_def = model.defense.get(home, 0.0)
+
+    # detect low-possession away side (typical relegation profile)
+    if away_att < -0.18 and away_def > 0:
+        chaos_factor = 1.05
+    # mirror case (rare but symmetric)
+    elif home_att < -0.18 and home_def > 0:
+        chaos_factor = 1.04
+    else:
+        chaos_factor = 1.00
+
+    mu_h_adj *= chaos_factor
+    mu_a_adj *= chaos_factor
 
     # Tempo + soft anchor
     mu_total = mu_h_adj + mu_a_adj
