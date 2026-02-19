@@ -8,18 +8,35 @@ import os
 import glob
 import sys
 import hashlib
+from typing import Optional, Dict, Tuple
 
-# Allow importing local model module from repo root
-sys.path.append(os.getcwd())
 
-# Prefer v11; fall back to v10 if repo doesn't have v11 yet
+# =============================================================================
+# PATHS (stabilno, bez os.getcwd() zabuna)
+# =============================================================================
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if APP_DIR not in sys.path:
+    sys.path.insert(0, APP_DIR)
+
+# Ako je repo root iznad app.py, dodaj i njega (za import model modula)
+REPO_ROOT = os.path.abspath(os.path.join(APP_DIR))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+
+# =============================================================================
+# IMPORT MODEL
+# =============================================================================
 MODEL_MODULE_CANDIDATES = [
     "bookmaker_kornerv11_logging",
+    "bookmaker_kornerv11",
     "bookmaker_kornerv10",
 ]
 
 model = None
 _model_import_errs = []
+MODEL_MODULE_NAME = "N/A"
+
 for _m in MODEL_MODULE_CANDIDATES:
     try:
         model = __import__(_m)
@@ -33,24 +50,21 @@ if model is None:
     st.stop()
 
 
-# ====================== PASSWORD ZAŠTITA ======================
+# =============================================================================
+# DATA_DIR (KLJUČNO): koristi isti data folder kao model
+# =============================================================================
+# Model u v11 ima DATA_DIR = os.path.join(BASE_DIR, "data")
+# Zato ovde preuzimamo model.DATA_DIR ako postoji.
+DATA_DIR = getattr(model, "DATA_DIR", os.path.join(APP_DIR, "data"))
+os.makedirs(DATA_DIR, exist_ok=True)
+
+
+# =============================================================================
+# PASSWORD ZAŠTITA
+# =============================================================================
 # NOTE: promeni lozinku pre deploy-a (nikad ne drži pravu lozinku u repo-u)
 PASSWORD = "tvoja_lozinka_2026"  # ← PROMENI OVO U NEŠTO JAKO!
 
-def check_password():
-    """Vrati True ako je password tačan."""
-    if "password_correct" not in st.session_state:
-        st.session_state.password_correct = False
-
-    if not st.session_state.password_correct:
-        st.text_input(
-            "Unesi lozinku za pristup",
-            type="password",
-            key="password",
-            on_change=check_password_callback
-        )
-        return False
-    return True
 
 def check_password_callback():
     if hashlib.sha256(st.session_state["password"].encode()).hexdigest() == hashlib.sha256(PASSWORD.encode()).hexdigest():
@@ -60,18 +74,37 @@ def check_password_callback():
         st.error("❌ Pogrešna lozinka")
 
 
-# ====================== START APP ======================
+def check_password() -> bool:
+    """Vrati True ako je password tačan."""
+    if "password_correct" not in st.session_state:
+        st.session_state.password_correct = False
+
+    if not st.session_state.password_correct:
+        st.text_input(
+            "Unesi lozinku za pristup",
+            type="password",
+            key="password",
+            on_change=check_password_callback,
+        )
+        return False
+    return True
+
+
+# =============================================================================
+# START APP
+# =============================================================================
 if not check_password():
     st.stop()
 
 st.title("🏟️ Corners Model Dashboard")
 st.markdown("**Premier League 2025/26 | Privatni dashboard**")
+st.caption(f"Data folder: `{DATA_DIR}` | Model modul: `{MODEL_MODULE_NAME}`")
 
-DATA_DIR = "data"
 
-
-# ====================== HELPERS ======================
-def _extract_gw_from_filename(path: str) -> int | None:
+# =============================================================================
+# HELPERS
+# =============================================================================
+def _extract_gw_from_filename(path: str) -> Optional[int]:
     base = os.path.basename(path)
     if "gw" not in base:
         return None
@@ -80,10 +113,25 @@ def _extract_gw_from_filename(path: str) -> int | None:
     except Exception:
         return None
 
-def _get_latest_file_per_gw(pattern: str) -> dict[int, str]:
+
+def _safe_col(df: pd.DataFrame, candidates: list[str]) -> Optional[str]:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def _latest_file(pattern: str) -> Optional[str]:
+    files = glob.glob(os.path.join(DATA_DIR, pattern))
+    if not files:
+        return None
+    return max(files, key=os.path.getmtime)
+
+
+def _get_latest_file_per_gw(pattern: str) -> Dict[int, str]:
     """Return map gw -> newest file path by mtime."""
     files = glob.glob(os.path.join(DATA_DIR, pattern))
-    by_gw: dict[int, str] = {}
+    by_gw: Dict[int, str] = {}
     for f in files:
         gw = _extract_gw_from_filename(f)
         if gw is None:
@@ -92,55 +140,60 @@ def _get_latest_file_per_gw(pattern: str) -> dict[int, str]:
             by_gw[gw] = f
     return by_gw
 
-def _safe_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
+
+def _files_signature(pattern: str) -> Tuple[Tuple[str, float], ...]:
+    """
+    Potpis fajlova (ime + mtime). Kad se bilo koji CSV promeni,
+    potpis se menja -> st.cache_data invalidira rezultat.
+    """
+    files = sorted(glob.glob(os.path.join(DATA_DIR, pattern)))
+    return tuple((os.path.basename(f), os.path.getmtime(f)) for f in files)
 
 
-# ====================== LOAD DATA ======================
+def get_current_mu_and_gw() -> Tuple[float, str]:
+    """Računa μ i GW iz NAJNOVIJEG odds fajla (bez keša)."""
+    latest_file = _latest_file("bookmaker_odds_corners_gw*.csv")
+    if not latest_file:
+        return 9.84, "N/A"
+
+    latest_gw = _extract_gw_from_filename(latest_file) or "N/A"
+    df_latest = pd.read_csv(latest_file)
+
+    mu_col = _safe_col(df_latest, ["mu_league", "mu_pl_league", "mu"])
+    mu = float(df_latest[mu_col].iloc[0]) if mu_col else 9.84
+    return mu, str(latest_gw)
+
+
+# =============================================================================
+# LOAD DATA (cache by signature)
+# =============================================================================
 @st.cache_data
-def load_all_gw_latest():
+def load_all_gw_latest(_sig: Tuple[Tuple[str, float], ...]) -> Dict[int, pd.DataFrame]:
     """Loads newest CSV per GW (handles multiple margin variants)."""
     by_gw = _get_latest_file_per_gw("bookmaker_odds_corners_gw*.csv")
-    dfs: dict[int, pd.DataFrame] = {}
+    dfs: Dict[int, pd.DataFrame] = {}
     for gw in sorted(by_gw.keys()):
         dfs[gw] = pd.read_csv(by_gw[gw])
     return dfs
 
-def get_current_mu_and_gw():
-    """Računa μ i GW iz NAJNOVIJEG fajla (bez keša)."""
-    files = glob.glob(os.path.join(DATA_DIR, "bookmaker_odds_corners_gw*.csv"))
-    if not files:
-        return 9.84, "N/A"
-    latest_file = max(files, key=os.path.getmtime)
-    latest_gw = _extract_gw_from_filename(latest_file) or "N/A"
-    df_latest = pd.read_csv(latest_file)
-    mu_col = _safe_col(df_latest, ["mu_league", "mu_pl_league", "mu"])
-    mu = float(df_latest[mu_col].iloc[0]) if mu_col else 9.84
-    return mu, latest_gw
 
-all_gw = load_all_gw_latest()
-gw_list = sorted(all_gw.keys())
-current_mu, current_gw = get_current_mu_and_gw()
-
-
-# ====================== LOAD FITTED MODEL (optional for custom) ======================
 @st.cache_data
-def load_fitted_model():
+def load_fitted_model(
+    _teams_sig: Tuple[Tuple[str, float], ...],
+    _sanity_sig: Tuple[Tuple[str, float], ...],
+    current_mu: float,
+):
     """
-    Loads team params from a CSV if present (your precomputed table),
+    Loads team params from the LATEST model_teams_table_gw*.csv (not hardcoded gw26),
     so Custom Matches tab can work without re-fitting.
     """
-    teams_path = os.path.join(DATA_DIR, "model_teams_table_gw26.csv")
-    if not os.path.exists(teams_path):
+    teams_path = _latest_file("model_teams_table_gw*.csv")
+    if not teams_path or not os.path.exists(teams_path):
         return None
 
     df_teams = pd.read_csv(teams_path)
 
-    # Try to build a minimal fitted model object compatible with compute_fixture_odds()
-    # If v11 has extra fields they should have defaults.
+    # Minimal fitted object compatible with compute_fixture_odds()
     fitted = model.FittedModel(
         teams=df_teams["team"].tolist(),
         beta0=0.0,
@@ -148,12 +201,13 @@ def load_fitted_model():
         alpha=0.03,
         attack={row["team"]: float(row["attack"]) for _, row in df_teams.iterrows()},
         defense={row["team"]: float(row["defense"]) for _, row in df_teams.iterrows()},
-        matches_w={row["team"]: float(row["matches_w"]) for _, row in df_teams.iterrows()},
-        team_tempo_factor={row["team"]: float(row["tempo"]) for _, row in df_teams.iterrows()},
+        matches_w={row["team"]: float(row["matches_w"]) for _, row in df_teams.iterrows()} if "matches_w" in df_teams.columns else {t: 38.0 for t in df_teams["team"].tolist()},
+        team_tempo_factor={row["team"]: float(row["tempo"]) for _, row in df_teams.iterrows()} if "tempo" in df_teams.columns else {t: 1.0 for t in df_teams["team"].tolist()},
     )
 
-    sanity_path = os.path.join(DATA_DIR, "model_sanity_table_gw26.csv")
-    if os.path.exists(sanity_path):
+    # Load sanity table (latest)
+    sanity_path = _latest_file("model_sanity_table_gw*.csv")
+    if sanity_path and os.path.exists(sanity_path):
         sanity = pd.read_csv(sanity_path)
 
         def _get_metric(name: str, default=None):
@@ -165,7 +219,7 @@ def load_fitted_model():
         fitted.beta0 = _get_metric("beta0", fitted.beta0)
         fitted.home_adv = _get_metric("home_adv", fitted.home_adv)
 
-        # Optional (if present in sanity table)
+        # Optional mu_league
         mu_l = _get_metric("mu_league", None)
         if mu_l is not None and hasattr(fitted, "mu_league"):
             fitted.mu_league = mu_l
@@ -179,17 +233,25 @@ def load_fitted_model():
 
     return fitted
 
-fitted_model = load_fitted_model()
+
+# signatures -> cache invalidation
+odds_sig = _files_signature("bookmaker_odds_corners_gw*.csv")
+teams_sig = _files_signature("model_teams_table_gw*.csv")
+sanity_sig = _files_signature("model_sanity_table_gw*.csv")
+
+all_gw = load_all_gw_latest(odds_sig)
+gw_list = sorted(all_gw.keys())
+current_mu, current_gw = get_current_mu_and_gw()
+
+fitted_model = load_fitted_model(teams_sig, sanity_sig, float(current_mu))
 
 
-# ====================== SIDEBAR ======================
+# =============================================================================
+# SIDEBAR
+# =============================================================================
 st.sidebar.header("🔧 Globalni parametri")
 
-st.sidebar.metric(
-    "Aktuelni μ League",
-    f"{current_mu:.3f} (GW{current_gw})"
-)
-
+st.sidebar.metric("Aktuelni μ League", f"{current_mu:.3f} (GW{current_gw})")
 st.sidebar.caption(f"Model modul: **{MODEL_MODULE_NAME}**")
 
 margin = st.sidebar.slider("Margin", 0.000, 0.120, 0.080, step=0.005)
@@ -198,14 +260,23 @@ over_price_boost = st.sidebar.slider("Pomeri kvotu za Over", 0.00, 0.10, 0.01, s
 use_tempo = st.sidebar.checkbox("Use Tempo Layer", value=False)
 
 st.sidebar.markdown("---")
-st.sidebar.caption("μ League + GW se ažurira posle svakog Recompute (na osnovu najnovijeg CSV-a).")
+st.sidebar.caption("Ako klikneš Recompute, UI će automatski učitati najnovije CSV-ove (bez restartovanja).")
+
+# Optional manual refresh (korisno kad deploy caching “zaglavi”)
+if st.sidebar.button("🧹 Clear cache + refresh"):
+    st.cache_data.clear()
+    st.rerun()
 
 
-# ====================== TABS ======================
+# =============================================================================
+# TABS
+# =============================================================================
 tab1, tab2 = st.tabs(["📊 Existing GW (Recompute)", "🆕 Custom Matches"])
 
 
-# ====================== TAB 1: EXISTING GW ======================
+# =============================================================================
+# TAB 1: EXISTING GW
+# =============================================================================
 with tab1:
     if not gw_list:
         st.warning("Nema dostupnih GW CSV fajlova u data folderu.")
@@ -228,10 +299,11 @@ with tab1:
                 model.main(
                     margin=margin,
                     over_price_boost=over_price_boost,
-                    alpha_squeeze=alpha_squeeze
+                    alpha_squeeze=alpha_squeeze,
                 )
 
-            # IMPORTANT: clear cached CSV loading so UI sees newest outputs
+            # Not strictly necessary anymore (we invalidate via signatures),
+            # but keeps behavior robust across deployments.
             st.cache_data.clear()
             st.success("✅ Recomputed current GW. Osvežavam rezultate…")
             st.rerun()
@@ -239,7 +311,7 @@ with tab1:
         df = all_gw[selected_gw]
         st.subheader(f"GW {selected_gw} – {len(df)} redova")
 
-        # Column compatibility between v10/v11
+        # Column compatibility between versions
         odds_over_col = _safe_col(df, ["bookmaker_odds_over", "odds_over"])
         odds_under_col = _safe_col(df, ["bookmaker_odds_under", "odds_under"])
 
@@ -265,19 +337,16 @@ with tab1:
         st.dataframe(
             df[cols_to_show].style.format(format_dict),
             use_container_width=True,
-            height=650
+            height=650,
         )
 
         csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "📥 Download CSV",
-            csv,
-            f"corners_gw{selected_gw}.csv",
-            "text/csv"
-        )
+        st.download_button("📥 Download CSV", csv, f"corners_gw{selected_gw}.csv", "text/csv")
 
 
-# ====================== TAB 2: CUSTOM MATCHES ======================
+# =============================================================================
+# TAB 2: CUSTOM MATCHES
+# =============================================================================
 with tab2:
     st.subheader("🆕 Custom Matches")
     st.caption("Unesi mečeve u formatu: `Home vs Away` (po liniji).")
@@ -285,10 +354,9 @@ with tab2:
     custom_input = st.text_area(
         "Mečevi",
         height=180,
-        placeholder="Liverpool vs Sunderland\nTottenham vs Newcastle"
+        placeholder="Liverpool vs Sunderland\nTottenham vs Newcastle",
     )
 
-    # You can make lines dynamic later; for now keep a reasonable ladder
     default_lines = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5]
 
     colA, colB = st.columns([2, 1])
@@ -303,7 +371,7 @@ with tab2:
         if not custom_input.strip():
             st.error("Unesi mečeve!")
         elif fitted_model is None:
-            st.error("Nema fitted modela (nema model_teams_table_gw26.csv u data folderu).")
+            st.error("Nema fitted modela (nema model_teams_table_gw*.csv u data folderu). Pokreni Recompute da se generiše.")
         elif not lines:
             st.error("Odaberi bar jednu liniju.")
         else:
@@ -332,9 +400,9 @@ with tab2:
                                     margin,
                                     float(current_mu),
                                     over_price_boost,
-                                    alpha_squeeze
+                                    alpha_squeeze,
                                 )
-                                # v11 returns ladder; make sure teams are present in DF
+                                # normalize column names for UI
                                 if "home_team" not in df_match.columns:
                                     df_match["home_team"] = home
                                 if "away_team" not in df_match.columns:
@@ -348,7 +416,6 @@ with tab2:
                 if custom_rows:
                     custom_df = pd.concat(custom_rows, ignore_index=True)
 
-                    # Harmonize odds column names
                     odds_over_col = _safe_col(custom_df, ["bookmaker_odds_over", "odds_over"])
                     odds_under_col = _safe_col(custom_df, ["bookmaker_odds_under", "odds_under"])
 
@@ -361,10 +428,7 @@ with tab2:
                     display_cols += [c for c in ["is_main_line", "main_line"] if c in custom_df.columns]
                     display_cols = [c for c in display_cols if c and c in custom_df.columns]
 
-                    fmt = {
-                        "p_over": "{:.1%}",
-                        "mu_match": "{:.2f}",
-                    }
+                    fmt = {"p_over": "{:.1%}", "mu_match": "{:.2f}"}
                     if odds_over_col:
                         fmt[odds_over_col] = "{:.2f}"
                     if odds_under_col:
@@ -373,8 +437,10 @@ with tab2:
                     st.dataframe(
                         custom_df[display_cols].style.format(fmt),
                         height=520,
-                        use_container_width=True
+                        use_container_width=True,
                     )
 
                     csv = custom_df.to_csv(index=False).encode("utf-8")
                     st.download_button("📥 Download Custom", csv, "custom_corners.csv", "text/csv")
+                else:
+                    st.warning("Nisam našao nijedan validan red u inputu. Koristi format: `Home vs Away`.")
